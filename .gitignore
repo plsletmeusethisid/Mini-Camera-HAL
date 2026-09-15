@@ -1,0 +1,11 @@
+/build/
+/build-*/
+/out/
+*.o
+*.obj
+*.exe
+*.pdb
+*.log
+.cache/
+.idea/
+.vscode/
