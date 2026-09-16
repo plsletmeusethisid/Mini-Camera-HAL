@@ -16,7 +16,7 @@ Environment: Ubuntu 24.04 runtime, GCC 13.3.0, C++20.
 | Deterministic CLI capture | Pass |
 | CMake/CTest execution | Pass: Release build with OpenCV, 3/3 CTest targets |
 | Generated-video OpenCV integration | Pass: generated MJPG AVI opened and captured as a 32x24 RGB frame |
-| GitHub Actions run | Pending: this workspace has no Git remote or connected GitHub repository |
+| GitHub Actions run | Pass: PR #1 run #3; build-test, ASan/UBSan, and TSan jobs succeeded |
 | Buffer and processing benchmarks | Pass; results recorded in `docs/performance.md` |
 
 LeakSanitizer cannot inspect `/proc` under this managed runtime. ASan/UBSan were therefore rerun with
