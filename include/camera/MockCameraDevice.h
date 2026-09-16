@@ -12,7 +12,8 @@ class MockCameraDevice final : public ICameraDevice {
   void close() noexcept override;
   [[nodiscard]] bool isOpen() const noexcept override;
   [[nodiscard]] std::string name() const override;
-  [[nodiscard]] DeviceCapture capture(const CaptureRequest& request) override;
+  [[nodiscard]] DeviceCapture capture(const CaptureRequest& request,
+                                      std::shared_ptr<FrameBuffer> target = {}) override;
 
  private:
   bool open_{false};

@@ -1,9 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(mini_camera_hal VERSION 0.1.0 LANGUAGES CXX)
+project(mini_camera_hal VERSION 0.3.0 LANGUAGES CXX)
 
 option(MCH_ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(MCH_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
+option(MCH_ENABLE_OPENCV "Build the OpenCV camera adapter when OpenCV is available" ON)
 
 if(MCH_ENABLE_ASAN AND MCH_ENABLE_TSAN)
   message(FATAL_ERROR "ASan and TSan must be enabled in separate builds")
@@ -33,8 +34,11 @@ endfunction()
 
 add_library(camera_core
   src/AsyncCameraSession.cpp
+  src/BufferPool.cpp
   src/CameraSession.cpp
   src/FrameBuffer.cpp
+  src/ImageProcessing.cpp
+  src/MetricsCollector.cpp
   src/MockCameraDevice.cpp
   src/RequestQueue.cpp
 )
@@ -43,6 +47,19 @@ find_package(Threads REQUIRED)
 target_link_libraries(camera_core PUBLIC Threads::Threads)
 mch_set_warnings(camera_core)
 mch_set_sanitizers(camera_core)
+
+if(MCH_ENABLE_OPENCV)
+  find_package(OpenCV QUIET COMPONENTS core imgproc videoio)
+  if(OpenCV_FOUND)
+    target_sources(camera_core PRIVATE src/OpenCVCameraDevice.cpp)
+    target_include_directories(camera_core PUBLIC ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(camera_core PUBLIC ${OpenCV_LIBS})
+    target_compile_definitions(camera_core PUBLIC MCH_HAS_OPENCV=1)
+    message(STATUS "OpenCV camera adapter enabled")
+  else()
+    message(STATUS "OpenCV not found; camera adapter disabled")
+  endif()
+endif()
 
 add_executable(mini_camera_hal src/main.cpp)
 target_link_libraries(mini_camera_hal PRIVATE camera_core)
@@ -57,3 +74,13 @@ if(BUILD_TESTING)
   mch_set_sanitizers(camera_tests)
   add_test(NAME camera_tests COMMAND camera_tests)
 endif()
+
+add_executable(buffer_benchmark benchmarks/buffer_benchmark.cpp)
+target_link_libraries(buffer_benchmark PRIVATE camera_core)
+mch_set_warnings(buffer_benchmark)
+mch_set_sanitizers(buffer_benchmark)
+
+add_executable(processing_benchmark benchmarks/processing_benchmark.cpp)
+target_link_libraries(processing_benchmark PRIVATE camera_core)
+mch_set_warnings(processing_benchmark)
+mch_set_sanitizers(processing_benchmark)

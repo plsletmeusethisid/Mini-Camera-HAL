@@ -5,6 +5,7 @@
 #include <string>
 
 #include "camera/CameraDevice.h"
+#include "camera/BufferPool.h"
 
 namespace camera {
 
@@ -13,7 +14,7 @@ struct CaptureResult {
   CaptureStatus status{CaptureStatus::kDeviceFailure};
   std::string message;
   CameraMetadata metadata;
-  std::unique_ptr<FrameBuffer> buffer;
+  std::shared_ptr<FrameBuffer> buffer;
   std::chrono::nanoseconds capture_latency{};
 
   [[nodiscard]] bool ok() const noexcept { return status == CaptureStatus::kOk; }
@@ -22,6 +23,7 @@ struct CaptureResult {
 class CameraSession {
  public:
   explicit CameraSession(std::unique_ptr<ICameraDevice> device);
+  CameraSession(std::unique_ptr<ICameraDevice> device, std::shared_ptr<BufferPool> buffer_pool);
   ~CameraSession();
 
   CameraSession(const CameraSession&) = delete;
@@ -39,6 +41,7 @@ class CameraSession {
 
  private:
   std::unique_ptr<ICameraDevice> device_;
+  std::shared_ptr<BufferPool> buffer_pool_;
 };
 
 }  // namespace camera

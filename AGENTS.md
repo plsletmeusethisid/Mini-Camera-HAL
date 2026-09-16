@@ -34,8 +34,11 @@ ctest --test-dir build --output-on-failure
 cmake -S . -B build-asan -DMCH_ENABLE_ASAN=ON -DCMAKE_BUILD_TYPE=Debug
 cmake --build build-asan --parallel
 ctest --test-dir build-asan --output-on-failure
+
+./build/buffer_benchmark --iterations 500
+./build/processing_benchmark
 ```
 
 If CMake is unavailable in a constrained environment, `./scripts/build_direct.sh` verifies the same
 sources using a C++20 compiler. Set `MCH_SANITIZE=address` or `MCH_SANITIZE=thread` for sanitizer
-verification.
+verification. Set `MCH_SKIP_BENCHMARKS=1` to shorten sanitizer-only builds.

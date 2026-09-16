@@ -28,7 +28,10 @@ esac
 core_sources=(
   "${project_dir}/src/CameraSession.cpp"
   "${project_dir}/src/AsyncCameraSession.cpp"
+  "${project_dir}/src/BufferPool.cpp"
   "${project_dir}/src/FrameBuffer.cpp"
+  "${project_dir}/src/ImageProcessing.cpp"
+  "${project_dir}/src/MetricsCollector.cpp"
   "${project_dir}/src/MockCameraDevice.cpp"
   "${project_dir}/src/RequestQueue.cpp"
 )
@@ -41,3 +44,13 @@ core_sources=(
 
 "${output_dir}/camera_tests"
 "${output_dir}/mini_camera_hal" --frames 3
+
+if [[ "${MCH_SKIP_BENCHMARKS:-0}" != "1" ]]; then
+  "${compiler}" "${common_flags[@]}" "${sanitizer_flags[@]}" "${core_sources[@]}" \
+    "${project_dir}/benchmarks/buffer_benchmark.cpp" -pthread -O2 \
+    -o "${output_dir}/buffer_benchmark"
+
+  "${compiler}" "${common_flags[@]}" "${sanitizer_flags[@]}" "${core_sources[@]}" \
+    "${project_dir}/benchmarks/processing_benchmark.cpp" -pthread -O2 \
+    -o "${output_dir}/processing_benchmark"
+fi

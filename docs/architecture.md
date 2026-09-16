@@ -37,15 +37,14 @@ contained and counted so consumer failure cannot silently terminate capture.
 Shutdown is draining: new submissions are rejected, blocked waiters wake, queued requests finish,
 the worker joins, and only then does the device close.
 
-## Ownership model: milestone 1
+## Ownership model
 
-`FrameBuffer` is move-only. A device constructs and exclusively owns a buffer during capture, then
-moves it into `DeviceCapture`. `CameraSession` moves it into `CaptureResult`, and the client owns the
-result. There is no aliasing and destruction follows normal RAII.
+`FrameBuffer` remains non-copyable. Without pooling, a device returns it through shared result
+ownership. With pooling, `BufferPool::acquire()` returns an RAII lease implemented as a `shared_ptr`
+with a custom deleter. Destroying the final result reference returns the buffer automatically.
 
-The buffer-pool milestone will intentionally change this boundary to a lease whose deleter returns
-the buffer to its pool. That ownership change must be benchmarked and tested rather than introduced
-prematurely.
+The deleter retains the pool's shared state, so a lease remains valid even if the `BufferPool` facade
+has already been destroyed. Pool shutdown wakes blocked acquirers and prevents new leases.
 
 ## Boundary validation
 
@@ -60,3 +59,5 @@ exceptions are converted into typed capture failures so hardware adapters cannot
 - Synchronous capture comes first to define behavior before thread scheduling complicates failures.
 - Status codes and messages are both returned: code for control flow, message for diagnosis.
 - Maximum resolution is bounded at the session boundary to prevent accidental giant allocations.
+- OpenCV is isolated in an adapter and PImpl; the core API does not expose OpenCV types.
+- Metrics copy latency samples when taking a snapshot, keeping capture recording short and thread-safe.

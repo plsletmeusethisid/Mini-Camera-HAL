@@ -8,9 +8,14 @@
 #include <memory>
 #include <mutex>
 #include <string_view>
+#include <string>
 
 #include "camera/AsyncCameraSession.h"
 #include "camera/MockCameraDevice.h"
+#include "camera/BufferPool.h"
+#ifdef MCH_HAS_OPENCV
+#include "camera/OpenCVCameraDevice.h"
+#endif
 
 namespace {
 
@@ -23,34 +28,85 @@ std::uint64_t checksum(const camera::FrameBuffer& buffer) {
   return value;
 }
 
-std::uint32_t parseFrameCount(int argc, char** argv) {
-  if (argc == 1) {
-    return 5;
+struct Options {
+  std::uint32_t frames{5};
+  std::string source{"mock"};
+  int device_index{};
+  std::string video_path;
+};
+
+template <typename Integer>
+Integer parseInteger(std::string_view text, std::string_view label) {
+  Integer value{};
+  const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+  if (error != std::errc{} || end != text.data() + text.size()) {
+    throw std::invalid_argument(std::string(label) + " must be an integer");
   }
-  if (argc != 3 || std::string_view(argv[1]) != "--frames") {
-    throw std::invalid_argument("usage: mini_camera_hal [--frames N]");
+  return value;
+}
+
+Options parseOptions(int argc, char** argv) {
+  Options options;
+  for (int index = 1; index < argc; ++index) {
+    const std::string_view argument(argv[index]);
+    if (argument == "--frames" && index + 1 < argc) {
+      options.frames = parseInteger<std::uint32_t>(argv[++index], "frame count");
+    } else if (argument == "--source" && index + 1 < argc) {
+      options.source = argv[++index];
+    } else if (argument == "--device" && index + 1 < argc) {
+      options.device_index = parseInteger<int>(argv[++index], "device index");
+    } else if (argument == "--video" && index + 1 < argc) {
+      options.video_path = argv[++index];
+      options.source = "video";
+    } else {
+      throw std::invalid_argument(
+          "usage: mini_camera_hal [--frames N] [--source mock|webcam] [--device N] [--video FILE]");
+    }
   }
-  std::uint32_t count{};
-  const std::string_view text(argv[2]);
-  const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), count);
-  if (error != std::errc{} || end != text.data() + text.size() || count == 0 || count > 1000) {
-    throw std::invalid_argument("frame count must be an integer within [1, 1000]");
+  if (options.frames == 0 || options.frames > 1000) {
+    throw std::invalid_argument("frame count must be within [1, 1000]");
   }
-  return count;
+  if (options.source != "mock" && options.source != "webcam" && options.source != "video") {
+    throw std::invalid_argument("source must be mock, webcam, or video");
+  }
+  if (options.source == "video" && options.video_path.empty()) {
+    throw std::invalid_argument("video source requires --video FILE");
+  }
+  return options;
+}
+
+std::unique_ptr<camera::ICameraDevice> makeDevice(const Options& options) {
+  if (options.source == "mock") {
+    return std::make_unique<camera::MockCameraDevice>();
+  }
+#ifdef MCH_HAS_OPENCV
+  if (options.source == "webcam") {
+    return camera::OpenCVCameraDevice::webcam(options.device_index);
+  }
+  return camera::OpenCVCameraDevice::videoFile(options.video_path);
+#else
+  (void)options;
+  throw std::runtime_error("webcam/video support requires a CMake build with OpenCV");
+#endif
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
   try {
-    const std::uint32_t frame_count = parseFrameCount(argc, argv);
+    const Options options = parseOptions(argc, argv);
+    const std::uint32_t frame_count = options.frames;
     std::mutex completion_mutex;
     std::condition_variable completion_cv;
     std::uint32_t completed = 0;
     bool capture_failed = false;
+    auto buffer_pool =
+        std::make_shared<camera::BufferPool>(8, camera::Resolution{640, 480},
+                                             camera::PixelFormat::kRgb888);
 
     camera::AsyncCameraSession session(
-        std::make_unique<camera::MockCameraDevice>(), 8, camera::QueueFullPolicy::kBlock,
+        makeDevice(options), buffer_pool, 8,
+        camera::QueueFullPolicy::kBlock,
         [&](camera::CaptureResult result) {
           if (!result.ok()) {
             std::cerr << "Frame " << result.frame_number << " failed: " << result.message << '\n';
@@ -75,7 +131,7 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "Mini Camera HAL - bounded asynchronous capture\n"
-              << "Device: Deterministic Mock Camera\n"
+              << "Source: " << options.source << "\n"
               << "Input: 640x480 RGB888\n"
               << "Queue: capacity=8 policy=block\n\n";
 
@@ -104,9 +160,18 @@ int main(int argc, char** argv) {
     }
     session.shutdown();
     const camera::AsyncStatistics stats = session.statistics();
+    const camera::MetricsSnapshot metrics = session.metrics();
+    const camera::BufferPoolStatistics pool_stats = buffer_pool->statistics();
     std::cout << "\nsubmitted=" << stats.accepted << " completed=" << stats.completed
               << " rejected=" << stats.rejected << " dropped=" << stats.dropped
-              << " callback_failures=" << stats.callback_failures << '\n';
+              << " callback_failures=" << stats.callback_failures << '\n'
+              << "fps=" << metrics.fps << " latency_mean_ms=" << metrics.capture_latency.mean_ms
+              << " p50_ms=" << metrics.capture_latency.p50_ms
+              << " p95_ms=" << metrics.capture_latency.p95_ms
+              << " p99_ms=" << metrics.capture_latency.p99_ms << '\n'
+              << "pool_capacity=" << pool_stats.capacity
+              << " pool_high_water_mark=" << pool_stats.high_water_mark
+              << " pool_acquisitions=" << pool_stats.acquisitions << '\n';
     return capture_failed ? 2 : 0;
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

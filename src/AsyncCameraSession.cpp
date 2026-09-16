@@ -17,6 +17,18 @@ AsyncCameraSession::AsyncCameraSession(std::unique_ptr<ICameraDevice> device,
   }
 }
 
+AsyncCameraSession::AsyncCameraSession(std::unique_ptr<ICameraDevice> device,
+                                       std::shared_ptr<BufferPool> buffer_pool,
+                                       std::size_t queue_capacity, QueueFullPolicy full_policy,
+                                       ResultCallback callback)
+    : session_(std::move(device), std::move(buffer_pool)),
+      queue_(queue_capacity, full_policy),
+      callback_(std::move(callback)) {
+  if (!callback_) {
+    throw std::invalid_argument("async camera session requires a result callback");
+  }
+}
+
 AsyncCameraSession::~AsyncCameraSession() { shutdown(); }
 
 bool AsyncCameraSession::start() {
@@ -93,6 +105,7 @@ AsyncStatistics AsyncCameraSession::statistics() const noexcept {
 void AsyncCameraSession::workerLoop() noexcept {
   while (std::optional<CaptureRequest> request = queue_.pop()) {
     CaptureResult result = session_.capture(*request);
+    metrics_.recordCapture(result.capture_latency);
     completed_.fetch_add(1);
     try {
       callback_(std::move(result));

@@ -16,12 +16,18 @@ bool MockCameraDevice::isOpen() const noexcept { return open_; }
 
 std::string MockCameraDevice::name() const { return "Deterministic Mock Camera"; }
 
-DeviceCapture MockCameraDevice::capture(const CaptureRequest& request) {
+DeviceCapture MockCameraDevice::capture(const CaptureRequest& request,
+                                        std::shared_ptr<FrameBuffer> target) {
   if (!open_) {
     throw std::runtime_error("capture requested while mock device is closed");
   }
 
-  auto buffer = std::make_unique<FrameBuffer>(next_buffer_id_++, request.resolution, request.format);
+  auto buffer = target ? std::move(target)
+                       : std::make_shared<FrameBuffer>(next_buffer_id_++, request.resolution,
+                                                       request.format);
+  if (buffer->resolution() != request.resolution || buffer->format() != request.format) {
+    throw std::invalid_argument("target buffer does not match capture request");
+  }
   auto bytes = buffer->bytes();
   for (std::size_t index = 0; index < bytes.size(); ++index) {
     bytes[index] = static_cast<std::uint8_t>((index + request.frame_number) % 256U);

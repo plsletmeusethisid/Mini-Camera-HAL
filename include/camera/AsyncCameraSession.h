@@ -9,6 +9,7 @@
 
 #include "camera/CameraSession.h"
 #include "camera/RequestQueue.h"
+#include "camera/MetricsCollector.h"
 
 namespace camera {
 
@@ -38,6 +39,8 @@ class AsyncCameraSession {
 
   AsyncCameraSession(std::unique_ptr<ICameraDevice> device, std::size_t queue_capacity,
                      QueueFullPolicy full_policy, ResultCallback callback);
+  AsyncCameraSession(std::unique_ptr<ICameraDevice> device, std::shared_ptr<BufferPool> buffer_pool,
+                     std::size_t queue_capacity, QueueFullPolicy full_policy, ResultCallback callback);
   ~AsyncCameraSession();
 
   AsyncCameraSession(const AsyncCameraSession&) = delete;
@@ -49,6 +52,7 @@ class AsyncCameraSession {
 
   [[nodiscard]] bool isRunning() const noexcept { return running_.load(); }
   [[nodiscard]] AsyncStatistics statistics() const noexcept;
+  [[nodiscard]] MetricsSnapshot metrics() const { return metrics_.snapshot(); }
 
  private:
   void workerLoop() noexcept;
@@ -63,6 +67,7 @@ class AsyncCameraSession {
   std::atomic<std::uint64_t> rejected_{0};
   std::atomic<std::uint64_t> dropped_{0};
   std::atomic<std::uint64_t> callback_failures_{0};
+  MetricsCollector metrics_;
 };
 
 }  // namespace camera

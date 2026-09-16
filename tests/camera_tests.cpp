@@ -17,6 +17,12 @@
 #include "camera/FrameBuffer.h"
 #include "camera/MockCameraDevice.h"
 #include "camera/RequestQueue.h"
+#include "camera/BufferPool.h"
+#include "camera/ImageProcessing.h"
+#include "camera/MetricsCollector.h"
+#ifdef MCH_HAS_OPENCV
+#include "camera/OpenCVCameraDevice.h"
+#endif
 
 namespace {
 
@@ -218,6 +224,93 @@ void callbackFailureDoesNotKillWorker() {
   CHECK(session.statistics().completed == 3U);
 }
 
+void bufferPoolReusesAndTracksLeases() {
+  camera::BufferPool pool(2, {8, 4}, camera::PixelFormat::kGray8);
+  auto first = pool.acquire();
+  auto second = pool.acquire();
+  CHECK(first != nullptr);
+  CHECK(second != nullptr);
+  CHECK(first->id() != second->id());
+  CHECK(pool.tryAcquire() == nullptr);
+  const std::uint64_t released_id = first->id();
+  first.reset();
+  auto reused = pool.acquire();
+  CHECK(reused->id() == released_id);
+  const camera::BufferPoolStatistics stats = pool.statistics();
+  CHECK(stats.capacity == 2U);
+  CHECK(stats.high_water_mark == 2U);
+  CHECK(stats.acquisitions == 3U);
+}
+
+void poolLeaseCanOutlivePoolObject() {
+  std::shared_ptr<camera::FrameBuffer> lease;
+  {
+    camera::BufferPool pool(1, {4, 2}, camera::PixelFormat::kGray8);
+    lease = pool.acquire();
+  }
+  CHECK(lease != nullptr);
+  CHECK(lease->size() == 8U);
+  lease.reset();
+}
+
+void poolShutdownWakesBlockedAcquire() {
+  camera::BufferPool pool(1, {4, 2}, camera::PixelFormat::kGray8);
+  auto held = pool.acquire();
+  std::atomic<bool> returned{false};
+  std::thread waiter([&] {
+    auto unavailable = pool.acquire();
+    CHECK(unavailable == nullptr);
+    returned.store(true);
+  });
+  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  pool.shutdown();
+  waiter.join();
+  CHECK(returned.load());
+}
+
+void grayscaleUsesExpectedLumaWeights() {
+  camera::FrameBuffer rgb(1, {3, 1}, camera::PixelFormat::kRgb888);
+  auto bytes = rgb.bytes();
+  bytes[0] = 255; bytes[1] = 0; bytes[2] = 0;
+  bytes[3] = 0; bytes[4] = 255; bytes[5] = 0;
+  bytes[6] = 0; bytes[7] = 0; bytes[8] = 255;
+  auto gray = camera::processing::rgbToGrayscale(rgb, 2);
+  CHECK(gray->bytes()[0] == 77U);
+  CHECK(gray->bytes()[1] == 149U);
+  CHECK(gray->bytes()[2] == 29U);
+}
+
+void gammaAndResizeProduceValidFrames() {
+  camera::FrameBuffer gray(1, {2, 2}, camera::PixelFormat::kGray8);
+  gray.bytes()[0] = 0; gray.bytes()[1] = 64; gray.bytes()[2] = 128; gray.bytes()[3] = 255;
+  camera::processing::gammaCorrect(gray, 2.0F);
+  CHECK(gray.bytes()[0] == 0U);
+  CHECK(gray.bytes()[3] == 255U);
+  auto resized = camera::processing::resizeBilinear(gray, {4, 4}, 2);
+  CHECK((resized->resolution() == camera::Resolution{4, 4}));
+  CHECK(resized->size() == 16U);
+}
+
+void metricsComputePercentilesAndFps() {
+  camera::MetricsCollector metrics;
+  for (int value = 1; value <= 100; ++value) {
+    metrics.recordCapture(std::chrono::milliseconds(value));
+  }
+  const camera::MetricsSnapshot snapshot = metrics.snapshot();
+  CHECK(snapshot.frames == 100U);
+  CHECK(std::abs(snapshot.capture_latency.p50_ms - 50.5) < 0.01);
+  CHECK(std::abs(snapshot.capture_latency.p95_ms - 95.05) < 0.01);
+  CHECK(std::abs(snapshot.capture_latency.p99_ms - 99.01) < 0.01);
+}
+
+#ifdef MCH_HAS_OPENCV
+void opencvAdapterHandlesMissingVideo() {
+  auto device = camera::OpenCVCameraDevice::videoFile("definitely-missing-video-file.mp4");
+  CHECK(device->name().find("definitely-missing") != std::string::npos);
+  CHECK(!device->open());
+}
+#endif
+
 }  // namespace
 
 int main() {
@@ -233,6 +326,15 @@ int main() {
       {"Shutdown wakes consumer", shutdownWakesBlockedConsumer},
       {"Async ordered delivery", asyncSessionDeliversAllAcceptedFrames},
       {"Callback failure containment", callbackFailureDoesNotKillWorker},
+      {"Buffer pool lease reuse", bufferPoolReusesAndTracksLeases},
+      {"Lease outlives pool", poolLeaseCanOutlivePoolObject},
+      {"Pool shutdown wakes acquirer", poolShutdownWakesBlockedAcquire},
+      {"RGB grayscale conversion", grayscaleUsesExpectedLumaWeights},
+      {"Gamma and bilinear resize", gammaAndResizeProduceValidFrames},
+      {"Latency percentiles", metricsComputePercentilesAndFps},
+#ifdef MCH_HAS_OPENCV
+      {"OpenCV missing-file behavior", opencvAdapterHandlesMissingVideo},
+#endif
   };
 
   std::size_t failures = 0;

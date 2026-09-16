@@ -22,6 +22,17 @@ CameraSession::CameraSession(std::unique_ptr<ICameraDevice> device) : device_(st
   }
 }
 
+CameraSession::CameraSession(std::unique_ptr<ICameraDevice> device,
+                             std::shared_ptr<BufferPool> buffer_pool)
+    : device_(std::move(device)), buffer_pool_(std::move(buffer_pool)) {
+  if (!device_) {
+    throw std::invalid_argument("camera session requires a device");
+  }
+  if (!buffer_pool_) {
+    throw std::invalid_argument("pooled camera session requires a buffer pool");
+  }
+}
+
 CameraSession::~CameraSession() { close(); }
 
 bool CameraSession::open() { return device_->open(); }
@@ -75,7 +86,21 @@ CaptureResult CameraSession::capture(const CaptureRequest& request) {
 
   const auto start = std::chrono::steady_clock::now();
   try {
-    DeviceCapture capture = device_->capture(request);
+    std::shared_ptr<FrameBuffer> target;
+    if (buffer_pool_) {
+      if (buffer_pool_->resolution() != request.resolution || buffer_pool_->format() != request.format) {
+        result.status = CaptureStatus::kInvalidRequest;
+        result.message = "capture request does not match configured buffer pool";
+        return result;
+      }
+      target = buffer_pool_->acquire();
+      if (!target) {
+        result.status = CaptureStatus::kDeviceFailure;
+        result.message = "buffer pool is shut down";
+        return result;
+      }
+    }
+    DeviceCapture capture = device_->capture(request, std::move(target));
     result.capture_latency = std::chrono::steady_clock::now() - start;
     result.metadata = capture.metadata;
     result.buffer = std::move(capture.buffer);
