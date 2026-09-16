@@ -33,6 +33,7 @@ class CameraSession {
 
   [[nodiscard]] bool open();
   void close() noexcept;
+  void cancelPending() noexcept;
   [[nodiscard]] bool isOpen() const noexcept;
   [[nodiscard]] std::string deviceName() const;
   [[nodiscard]] CaptureResult capture(const CaptureRequest& request);

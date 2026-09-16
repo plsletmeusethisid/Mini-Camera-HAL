@@ -1,3 +1,4 @@
+#include <atomic>
 #include <cmath>
 #include <chrono>
 #include <condition_variable>
@@ -224,6 +225,106 @@ void callbackFailureDoesNotKillWorker() {
   CHECK(session.statistics().completed == 3U);
 }
 
+void shutdownCancelsBlockedPoolAcquisition() {
+  auto pool = std::make_shared<camera::BufferPool>(1, camera::Resolution{4, 2},
+                                                   camera::PixelFormat::kGray8);
+  std::mutex mutex;
+  std::condition_variable cv;
+  std::shared_ptr<camera::FrameBuffer> held_lease;
+  bool first_callback = false;
+  camera::AsyncCameraSession session(
+      std::make_unique<camera::MockCameraDevice>(), pool, 2,
+      camera::QueueFullPolicy::kBlock, [&](camera::CaptureResult result) {
+        if (result.frame_number == 1U && result.ok()) {
+          std::lock_guard lock(mutex);
+          held_lease = std::move(result.buffer);
+          first_callback = true;
+          cv.notify_all();
+        }
+      });
+
+  CHECK(session.start());
+  CHECK(session.state() == camera::SessionState::kRunning);
+  CHECK(session.submit({.frame_number = 1,
+                        .resolution = {4, 2},
+                        .format = camera::PixelFormat::kGray8})
+            .accepted());
+  {
+    std::unique_lock lock(mutex);
+    CHECK(cv.wait_for(lock, std::chrono::seconds(2), [&] { return first_callback; }));
+  }
+  CHECK(session.submit({.frame_number = 2,
+                        .resolution = {4, 2},
+                        .format = camera::PixelFormat::kGray8})
+            .accepted());
+
+  std::atomic<bool> shutdown_returned{false};
+  std::thread stopper([&] {
+    session.shutdown();
+    shutdown_returned.store(true);
+    cv.notify_all();
+  });
+  bool returned_before_releasing_lease = false;
+  {
+    std::unique_lock lock(mutex);
+    returned_before_releasing_lease =
+        cv.wait_for(lock, std::chrono::seconds(2), [&] { return shutdown_returned.load(); });
+    held_lease.reset();
+  }
+  stopper.join();
+  CHECK(returned_before_releasing_lease);
+  CHECK(session.state() == camera::SessionState::kStopped);
+}
+
+void callbackCanRequestShutdownWithoutSelfJoin() {
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool callback_returned = false;
+  camera::AsyncCameraSession* session_ptr = nullptr;
+  camera::AsyncCameraSession session(
+      std::make_unique<camera::MockCameraDevice>(), 2, camera::QueueFullPolicy::kBlock,
+      [&](camera::CaptureResult result) {
+        if (result.ok()) {
+          session_ptr->shutdown();
+          {
+            std::lock_guard lock(mutex);
+            callback_returned = true;
+          }
+          cv.notify_all();
+        }
+      });
+  session_ptr = &session;
+
+  CHECK(session.start());
+  CHECK(session.submit({.frame_number = 1,
+                        .resolution = {4, 2},
+                        .format = camera::PixelFormat::kGray8})
+            .accepted());
+  {
+    std::unique_lock lock(mutex);
+    CHECK(cv.wait_for(lock, std::chrono::seconds(2), [&] { return callback_returned; }));
+  }
+  session.shutdown();
+  CHECK(session.state() == camera::SessionState::kStopped);
+  CHECK(session.statistics().completed == 1U);
+}
+
+void stoppedSessionExplicitlyRejectsRestart() {
+  camera::AsyncCameraSession session(
+      std::make_unique<camera::MockCameraDevice>(), 2, camera::QueueFullPolicy::kBlock,
+      [](camera::CaptureResult) {});
+  CHECK(session.state() == camera::SessionState::kCreated);
+  CHECK(session.start());
+  session.shutdown();
+  CHECK(session.state() == camera::SessionState::kStopped);
+  CHECK(!session.start());
+  CHECK(!session.isRunning());
+  CHECK(session.submit({.frame_number = 1,
+                        .resolution = {4, 2},
+                        .format = camera::PixelFormat::kGray8})
+            .status == camera::SubmitStatus::kStopped);
+}
+
 void bufferPoolReusesAndTracksLeases() {
   camera::BufferPool pool(2, {8, 4}, camera::PixelFormat::kGray8);
   auto first = pool.acquire();
@@ -298,9 +399,24 @@ void metricsComputePercentilesAndFps() {
   }
   const camera::MetricsSnapshot snapshot = metrics.snapshot();
   CHECK(snapshot.frames == 100U);
+  CHECK(snapshot.sample_count == 100U);
+  CHECK(snapshot.sample_capacity == camera::MetricsCollector::kDefaultSampleCapacity);
   CHECK(std::abs(snapshot.capture_latency.p50_ms - 50.5) < 0.01);
   CHECK(std::abs(snapshot.capture_latency.p95_ms - 95.05) < 0.01);
   CHECK(std::abs(snapshot.capture_latency.p99_ms - 99.01) < 0.01);
+}
+
+void metricsRetainOnlyBoundedRollingWindow() {
+  camera::MetricsCollector metrics(32);
+  for (int value = 1; value <= 1000; ++value) {
+    metrics.recordCapture(std::chrono::milliseconds(value));
+  }
+  const camera::MetricsSnapshot snapshot = metrics.snapshot();
+  CHECK(snapshot.frames == 1000U);
+  CHECK(snapshot.sample_count == 32U);
+  CHECK(snapshot.sample_capacity == 32U);
+  CHECK(std::abs(snapshot.capture_latency.p50_ms - 984.5) < 0.01);
+  CHECK(snapshot.capture_latency.max_ms == 1000.0);
 }
 
 #ifdef MCH_HAS_OPENCV
@@ -326,12 +442,16 @@ int main() {
       {"Shutdown wakes consumer", shutdownWakesBlockedConsumer},
       {"Async ordered delivery", asyncSessionDeliversAllAcceptedFrames},
       {"Callback failure containment", callbackFailureDoesNotKillWorker},
+      {"Shutdown cancels blocked pool acquisition", shutdownCancelsBlockedPoolAcquisition},
+      {"Callback-requested shutdown", callbackCanRequestShutdownWithoutSelfJoin},
+      {"Restart is explicitly rejected", stoppedSessionExplicitlyRejectsRestart},
       {"Buffer pool lease reuse", bufferPoolReusesAndTracksLeases},
       {"Lease outlives pool", poolLeaseCanOutlivePoolObject},
       {"Pool shutdown wakes acquirer", poolShutdownWakesBlockedAcquire},
       {"RGB grayscale conversion", grayscaleUsesExpectedLumaWeights},
       {"Gamma and bilinear resize", gammaAndResizeProduceValidFrames},
       {"Latency percentiles", metricsComputePercentilesAndFps},
+      {"Bounded metrics window", metricsRetainOnlyBoundedRollingWindow},
 #ifdef MCH_HAS_OPENCV
       {"OpenCV missing-file behavior", opencvAdapterHandlesMissingVideo},
 #endif

@@ -12,6 +12,9 @@ by camera HAL architecture but must never claim to implement Android's Camera HA
 - Buffers are move-only until the buffer-pool milestone introduces leased shared ownership.
 - Invalid requests fail at the session boundary before reaching a device.
 - No error path may leak a buffer, strand a waiter, or terminate a worker thread.
+- Async lifecycle transitions must be explicit; stopped sessions are non-restartable.
+- Shutdown must cancel blocked buffer acquisition and must never self-join from a callback.
+- Metrics retention must remain bounded independently of capture duration.
 - Queue capacity and overflow behavior must be explicit and observable.
 - Performance claims require checked-in benchmark evidence and environment details.
 - `main.cpp` is a demo client; business logic belongs in `camera_core`.

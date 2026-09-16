@@ -168,7 +168,9 @@ int main(int argc, char** argv) {
               << "fps=" << metrics.fps << " latency_mean_ms=" << metrics.capture_latency.mean_ms
               << " p50_ms=" << metrics.capture_latency.p50_ms
               << " p95_ms=" << metrics.capture_latency.p95_ms
-              << " p99_ms=" << metrics.capture_latency.p99_ms << '\n'
+              << " p99_ms=" << metrics.capture_latency.p99_ms
+              << " metrics_samples=" << metrics.sample_count << '/' << metrics.sample_capacity
+              << '\n'
               << "pool_capacity=" << pool_stats.capacity
               << " pool_high_water_mark=" << pool_stats.high_water_mark
               << " pool_acquisitions=" << pool_stats.acquisitions << '\n';
