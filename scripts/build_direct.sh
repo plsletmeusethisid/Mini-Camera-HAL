@@ -43,6 +43,11 @@ core_sources=(
   "${project_dir}/tests/camera_tests.cpp" -pthread -o "${output_dir}/camera_tests"
 
 "${output_dir}/camera_tests"
+
+"${compiler}" "${common_flags[@]}" "${sanitizer_flags[@]}" "${core_sources[@]}" \
+  "${project_dir}/tests/soak_test.cpp" -pthread -o "${output_dir}/camera_soak_test"
+
+"${output_dir}/camera_soak_test"
 "${output_dir}/mini_camera_hal" --frames 3
 
 if [[ "${MCH_SKIP_BENCHMARKS:-0}" != "1" ]]; then

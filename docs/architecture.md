@@ -34,8 +34,29 @@ That gives later concurrency work a tested semantic baseline.
 drains accepted requests and moves each result into the client callback. Callback exceptions are
 contained and counted so consumer failure cannot silently terminate capture.
 
-Shutdown is draining: new submissions are rejected, blocked waiters wake, queued requests finish,
-the worker joins, and only then does the device close.
+Shutdown is cancellation-aware: new submissions are rejected, queue and buffer-pool waiters wake,
+and queued requests are returned as failed results when buffer acquisition has been cancelled. An
+external caller joins the worker before final close. If shutdown originates inside the worker's
+result callback, it signals cancellation and returns without self-joining; a later external call or
+the destructor performs the join.
+
+## Lifecycle
+
+```mermaid
+stateDiagram-v2
+  [*] --> Created
+  Created --> Starting: start
+  Starting --> Running: device opened
+  Starting --> Failed: startup error
+  Running --> Stopping: shutdown
+  Stopping --> Stopped: worker exits
+  Created --> Stopped: shutdown before start
+  Failed --> Stopped: shutdown
+```
+
+Sessions are intentionally non-restartable. `start()` is accepted only from `Created`; calls from
+`Running`, `Stopped`, or `Failed` return `false`. Recreating a session also recreates its terminal
+queue and buffer-pool state.
 
 ## Ownership model
 
@@ -54,10 +75,12 @@ exceptions are converted into typed capture failures so hardware adapters cannot
 
 ## Design decisions
 
-- The core currently has no OpenCV dependency. OpenCV will be isolated in a future adapter.
+- OpenCV remains optional and is isolated in the device adapter; the domain types expose no OpenCV
+  objects.
 - Deterministic pixel generation makes correctness checks reproducible.
 - Synchronous capture comes first to define behavior before thread scheduling complicates failures.
 - Status codes and messages are both returned: code for control flow, message for diagnosis.
 - Maximum resolution is bounded at the session boundary to prevent accidental giant allocations.
 - OpenCV is isolated in an adapter and PImpl; the core API does not expose OpenCV types.
-- Metrics copy latency samples when taking a snapshot, keeping capture recording short and thread-safe.
+- Metrics retain a configurable rolling window (4,096 samples by default) while frame and elapsed
+  counters cover the full run. Snapshot sorting is therefore bounded in both memory and CPU cost.

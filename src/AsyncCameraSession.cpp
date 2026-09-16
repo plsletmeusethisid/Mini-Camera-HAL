@@ -32,26 +32,29 @@ AsyncCameraSession::AsyncCameraSession(std::unique_ptr<ICameraDevice> device,
 AsyncCameraSession::~AsyncCameraSession() { shutdown(); }
 
 bool AsyncCameraSession::start() {
-  bool expected = false;
-  if (!running_.compare_exchange_strong(expected, true)) {
+  std::lock_guard lock(lifecycle_mutex_);
+  if (state_.load() != SessionState::kCreated) {
     return false;
   }
+  state_.store(SessionState::kStarting);
   if (!session_.open()) {
-    running_.store(false);
+    state_.store(SessionState::kFailed);
     return false;
   }
   try {
     worker_ = std::thread(&AsyncCameraSession::workerLoop, this);
+    worker_id_ = worker_.get_id();
+    state_.store(SessionState::kRunning);
   } catch (...) {
     session_.close();
-    running_.store(false);
+    state_.store(SessionState::kFailed);
     throw;
   }
   return true;
 }
 
 SubmitResult AsyncCameraSession::submit(CaptureRequest request) {
-  if (!running_.load()) {
+  if (state_.load() != SessionState::kRunning) {
     rejected_.fetch_add(1);
     return {.status = SubmitStatus::kStopped, .dropped_frame_number = std::nullopt};
   }
@@ -82,14 +85,43 @@ SubmitResult AsyncCameraSession::submit(CaptureRequest request) {
 }
 
 void AsyncCameraSession::shutdown() noexcept {
-  if (!running_.exchange(false)) {
+  bool called_from_worker = false;
+  {
+    std::lock_guard lock(lifecycle_mutex_);
+    const SessionState current = state_.load();
+    if (current == SessionState::kCreated || current == SessionState::kFailed) {
+      state_.store(SessionState::kStopped);
+    } else if (current == SessionState::kStarting || current == SessionState::kRunning) {
+      state_.store(SessionState::kStopping);
+    }
+    called_from_worker = worker_id_ != std::thread::id{} &&
+                         worker_id_ == std::this_thread::get_id();
+  }
+
+  queue_.shutdown();
+  session_.cancelPending();
+
+  // A callback runs on the worker. It may request shutdown, but it must never
+  // attempt to join itself. A later external shutdown (or the destructor)
+  // performs the join after the worker loop exits.
+  if (called_from_worker) {
     return;
   }
-  queue_.shutdown();
+
+  std::unique_lock lock(lifecycle_mutex_);
+  lifecycle_cv_.wait(lock, [this] { return !join_in_progress_; });
   if (worker_.joinable()) {
+    join_in_progress_ = true;
+    lock.unlock();
     worker_.join();
+    lock.lock();
+    join_in_progress_ = false;
+    worker_id_ = {};
   }
   session_.close();
+  state_.store(SessionState::kStopped);
+  lock.unlock();
+  lifecycle_cv_.notify_all();
 }
 
 AsyncStatistics AsyncCameraSession::statistics() const noexcept {
@@ -113,6 +145,9 @@ void AsyncCameraSession::workerLoop() noexcept {
       callback_failures_.fetch_add(1);
     }
   }
+  session_.close();
+  state_.store(SessionState::kStopped);
+  lifecycle_cv_.notify_all();
 }
 
 }  // namespace camera

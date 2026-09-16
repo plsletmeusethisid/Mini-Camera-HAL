@@ -15,15 +15,16 @@ is designed to demonstrate native systems engineering—not merely display webca
 - Session-level request validation and exception containment
 - Producer-consumer request pipeline with a dedicated capture worker
 - Bounded queue with block, reject-newest, and drop-oldest policies
-- Draining shutdown that wakes blocked producers and consumers
+- Explicit lifecycle state machine with cancellation-aware shutdown
+- Shutdown safe from worker callbacks; stopped sessions explicitly reject restart
 - Callback exception containment and observable async counters
 - Reusable buffer pool with shutdown-safe RAII leases and high-water metrics
 - Manual RGB-to-grayscale, gamma correction, and bilinear resize stages
 - Optional OpenCV webcam and video-file adapter behind a PImpl boundary
-- FPS and mean/P50/P95/P99/max capture latency
+- FPS and rolling-window mean/P50/P95/P99/max capture latency with bounded memory
 - CMake/CTest project with warning and sanitizer options
-- GitHub Actions release and ASan/UBSan builds
-- Seventeen behavioral tests, including concurrent delivery and buffer lifetime
+- GitHub Actions CMake/OpenCV, ASan/UBSan, and TSan jobs
+- Twenty-one behavioral tests plus a generated-video integration test and 10,000-frame soak test
 
 ```mermaid
 flowchart LR
@@ -71,6 +72,10 @@ ctest --test-dir build-asan --output-on-failure
 
 ThreadSanitizer is configured separately with `-DMCH_ENABLE_TSAN=ON` for the asynchronous milestone.
 
+`AsyncCameraSession` is deliberately single-use. `start()` succeeds only from `kCreated`; after
+shutdown or a startup failure, another `start()` returns `false`. Create a new session to restart a
+camera stream. This makes queue and buffer-pool shutdown terminal and unambiguous.
+
 For a constrained Linux environment without CMake or OpenCV:
 
 ```bash
@@ -97,6 +102,8 @@ methodology, limitations, and reproduction commands.
 The synchronous `CameraSession` remains the semantic engine under `AsyncCameraSession`. This keeps
 request validation, ownership, and device error mapping independent from scheduling. The worker owns
 the only device access path, so frame order is deterministic in the current single-worker model.
+Shutdown cancels blocked buffer acquisition, and a callback may call `shutdown()` without attempting
+to join its own worker thread.
 
 ## License
 

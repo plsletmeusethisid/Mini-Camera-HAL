@@ -39,6 +39,12 @@ bool CameraSession::open() { return device_->open(); }
 
 void CameraSession::close() noexcept { device_->close(); }
 
+void CameraSession::cancelPending() noexcept {
+  if (buffer_pool_) {
+    buffer_pool_->shutdown();
+  }
+}
+
 bool CameraSession::isOpen() const noexcept { return device_->isOpen(); }
 
 std::string CameraSession::deviceName() const { return device_->name(); }

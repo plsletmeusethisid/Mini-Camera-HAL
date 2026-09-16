@@ -12,7 +12,7 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y ninja-build libopencv-dev
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMCH_ENABLE_OPENCV=ON
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DMCH_ENABLE_OPENCV=ON
       - name: Build
         run: cmake --build build --parallel
       - name: Test
@@ -27,7 +27,7 @@ jobs:
       - name: Install Ninja
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Configure ASan/UBSan
-        run: cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMCH_ENABLE_ASAN=ON -DMCH_ENABLE_OPENCV=OFF
+        run: cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DMCH_ENABLE_ASAN=ON -DMCH_ENABLE_OPENCV=OFF
       - name: Build
         run: cmake --build build-asan --parallel
       - name: Test
@@ -40,7 +40,7 @@ jobs:
       - name: Install Ninja
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Configure TSan
-        run: cmake -S . -B build-tsan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMCH_ENABLE_TSAN=ON -DMCH_ENABLE_OPENCV=OFF
+        run: cmake -S . -B build-tsan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DMCH_ENABLE_TSAN=ON -DMCH_ENABLE_OPENCV=OFF
       - name: Build
         run: cmake --build build-tsan --parallel
       - name: Test
